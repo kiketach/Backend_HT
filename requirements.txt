@@ -1,5 +1,8 @@
 flask
 flask_cors
 google-cloud-aiplatform
+google-cloud-speech
 python-dotenv
 gunicorn
+requests
+python-magic
