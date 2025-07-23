@@ -171,55 +171,6 @@ def chat():
         
     return Response(generate_sse(), mimetype='text/event-stream')
 
-@app.route('/agent/audio', methods=['POST'])
-def agent_audio():
-    if 'audio' not in request.files:
-        return jsonify({"error": "No audio file provided"}), 400
-
-    audio_file = request.files['audio']
-    session_id = request.form.get('session_id')
-    user_id = request.form.get('user_id')
-
-    # Guardar el archivo temporalmente
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_audio:
-        audio_file.save(temp_audio)
-        temp_file_path = temp_audio.name
-
-    # Detectar el mime_type (puedes mejorarlo)
-    mime_type = audio_file.mimetype or 'audio/webm'
-
-    # Transcribir el audio
-    transcripcion = transcribe_audio_web(temp_file_path, mime_type)
-
-    respuesta = None
-    if transcripcion and remote_agent_engine:
-        # Llama al agente con la transcripción como mensaje usando stream_query
-        try:
-            agent_response = remote_agent_engine.stream_query(
-                user_id=user_id,
-                session_id=session_id,
-                message=transcripcion
-            )
-            # Extrae la respuesta de la misma forma que en el endpoint de texto
-            if hasattr(agent_response, '__iter__'):
-                for event in agent_response:
-                    text_content = extract_text_from_event(event)
-                    if text_content:
-                        respuesta = text_content
-                        break
-            else:
-                respuesta = agent_response if isinstance(agent_response, str) else str(agent_response)
-        except Exception as e:
-            respuesta = f"Error al obtener respuesta del agente: {str(e)}"
-
-    # Limpieza del archivo temporal
-    os.remove(temp_file_path)
-
-    return jsonify({
-        "transcripcion": transcripcion,
-        "respuesta": respuesta
-    })
-
 
 # --- Integración con WhatsApp ---
 
@@ -284,19 +235,25 @@ def download_media(media_id):
             os.remove(temp_file_path)
         return None, None
 
-def transcribe_audio_whatsapp(file_path, mime_type):
+def transcribe_audio(file_path, mime_type):
     """
-    Transcribe audio usando Google Cloud Speech-to-Text (lógica original WhatsApp)
+    Transcribe audio usando Google Cloud Speech-to-Text
     """
     if not SPEECH_CLIENT_AVAILABLE:
         logger.warning("Google Cloud Speech-to-Text no está disponible")
         return None
+    
     try:
         client = speech.SpeechClient()
+        
+        # Leer el archivo de audio
         with open(file_path, 'rb') as audio_file:
             content = audio_file.read()
+        
+        # Configurar el audio
         audio = speech.RecognitionAudio(content=content)
-        # Lógica original: OGG_OPUS y sample_rate_hertz=16000
+        
+        # Determinar el formato de audio basado en mime_type
         encoding = speech.RecognitionConfig.AudioEncoding.OGG_OPUS
         if 'mp3' in mime_type:
             encoding = speech.RecognitionConfig.AudioEncoding.MP3
@@ -304,60 +261,32 @@ def transcribe_audio_whatsapp(file_path, mime_type):
             encoding = speech.RecognitionConfig.AudioEncoding.LINEAR16
         elif 'webm' in mime_type:
             encoding = speech.RecognitionConfig.AudioEncoding.WEBM_OPUS
+        
+        # Configurar el reconocimiento
         config = speech.RecognitionConfig(
             encoding=encoding,
-            sample_rate_hertz=16000,  # Frecuencia de muestreo típica para WhatsApp
-            language_code="es-ES",
-            alternative_language_codes=["es-CO", "es-MX", "en-US"],
+            sample_rate_hertz=16000,  # Frecuencia de muestreo típica
+            language_code="es-ES",    # Español
+            alternative_language_codes=["es-CO", "es-MX", "en-US"],  # Alternativas
             enable_automatic_punctuation=True,
             enable_word_confidence=True,
             max_alternatives=1
         )
+        
+        # Realizar la transcripción
         response = client.recognize(config=config, audio=audio)
+        
+        # Extraer el texto transcrito
         if response.results:
             transcription = response.results[0].alternatives[0].transcript
             confidence = response.results[0].alternatives[0].confidence
+            
             logger.info(f"Transcripción exitosa con confianza: {confidence:.2f}")
             return transcription
         else:
             logger.warning("No se pudo transcribir el audio")
             return None
-    except Exception as e:
-        logger.error(f"Error al transcribir audio: {str(e)}")
-        return None
-
-def transcribe_audio_web(file_path, mime_type):
-    """
-    Transcribe audio para la web (WEBM_OPUS sin sample_rate_hertz)
-    """
-    if not SPEECH_CLIENT_AVAILABLE:
-        logger.warning("Google Cloud Speech-to-Text no está disponible")
-        return None
-    try:
-        client = speech.SpeechClient()
-        with open(file_path, 'rb') as audio_file:
-            content = audio_file.read()
-        audio = speech.RecognitionAudio(content=content)
-        if mime_type in ["audio/webm", "audio/webm;codecs=opus"]:
-            encoding = speech.RecognitionConfig.AudioEncoding.WEBM_OPUS
-            config = speech.RecognitionConfig(
-                encoding=encoding,
-                language_code="es-CO",
-                enable_automatic_punctuation=True,
-            )
-        else:
-            encoding = speech.RecognitionConfig.AudioEncoding.LINEAR16
-            config = speech.RecognitionConfig(
-                encoding=encoding,
-                sample_rate_hertz=16000,
-                language_code="es-CO",
-                enable_automatic_punctuation=True,
-            )
-        response = client.recognize(config=config, audio=audio)
-        for result in response.results:
-            return result.alternatives[0].transcript
-        logger.warning("No se pudo transcribir el audio")
-        return None
+            
     except Exception as e:
         logger.error(f"Error al transcribir audio: {str(e)}")
         return None
@@ -489,7 +418,7 @@ def whatsapp_webhook():
                 logger.info(f"Archivo de audio descargado en: {temp_file_path}, MIME-type: {mime_type}")
                 try:
                     # Intentar transcribir el audio primero
-                    transcribed_text = transcribe_audio_whatsapp(temp_file_path, mime_type)
+                    transcribed_text = transcribe_audio(temp_file_path, mime_type)
                     
                     if transcribed_text:
                         logger.info(f"Audio transcrito exitosamente: {transcribed_text}")
