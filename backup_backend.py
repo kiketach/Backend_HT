@@ -1,3 +1,4 @@
+# backend original solo archivos de voz con whatsapp (sin web)
 from flask import Flask, request, Response, jsonify
 from flask_cors import CORS
 import vertexai
